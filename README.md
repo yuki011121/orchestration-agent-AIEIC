@@ -2,8 +2,6 @@
 
 Single entry point for the AIEIC Lab Multi-Agent System. Routes all student and instructor requests to the appropriate backend agents.
 
-**Port:** 8000 | **Owner:** Yayun | **Status:** 🟡 In development
-
 ---
 
 ## Architecture
@@ -98,8 +96,4 @@ Full request/response schemas and end-to-end flows: [`INTERFACE_CONTRACT.md`](ht
 | POST | `/orchestrator/instructor/review/{id}/complete` | Complete manual review |
 | GET | `/orchestrator/instructor/grades/csv?lab_id=` | Download grades as CSV |
 
-## Roadmap
 
-- **v0.1 (now):** Skeleton with mocks. Real Participant + Assessment connected.
-- **v0.2:** Policy Guardian node in LangGraph. Session store → Cosmos DB. WebSocket streaming for student chat.
-- **v0.3:** Curriculum Designer connected. Full end-to-end with all real agents.
