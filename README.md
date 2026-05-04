@@ -18,14 +18,20 @@ Frontend (React / Figma)
   └──┬──────┬──────┬──────────────────────┬──┘
      │      │      │                      │
      ▼      ▼      ▼                      ▼
- :8001   :8002  :8003                  :8004
-Particip Compan Curricu              Assessment
-  Agent  ion    lum                    Agent
+ :8001   :8002  :8003   :8004          :8005
+Particip Compan Curricu Assessment   Integrity
+  Agent  ion    lum       Agent        Agent
 ```
 
 The frontend talks **only** to the Orchestrator. Agents do not call each other directly.
 
-The student message flow (`load_context → policy_check → call_companion → log_interaction`) uses LangGraph because it is sequential with conditional routing — Phase 2 inserts a Policy Guardian node between `policy_check` and `call_companion`. The instructor dashboard uses `asyncio.gather` instead: three independent HTTP calls with no branching.
+The student message flow uses LangGraph because it is sequential with conditional routing:
+
+```
+load_context → policy_check → call_companion → log_interaction
+```
+
+`policy_check` calls the Integrity Agent (`POST /validate`) on every student message. If `session_escalated=True` (3+ violations), the companion is skipped and a refusal is returned directly. The instructor dashboard uses `asyncio.gather` instead: parallel HTTP calls with no branching.
 
 ## Quick Start (all agents mocked)
 
@@ -33,11 +39,13 @@ The student message flow (`load_context → policy_check → call_companion → 
 # 1. Install
 pip install -r requirements.txt
 
-# 2. Start mock agents (ports 8001–8004)
+# 2. Start mock agents (ports 8001–8004) and the real Integrity Agent (port 8005)
 python -m aieic_shared.mocks.run_all
+# In a separate terminal, start the Integrity Agent:
+cd ../integrity_agent && uvicorn app:app --port 8005 --reload
 
 # 3. Start orchestrator (in a separate terminal)
-cp .env.example .env
+cp .env.example .env          # fill in INTEGRITY_TOKEN
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 

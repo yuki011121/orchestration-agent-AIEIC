@@ -73,10 +73,13 @@ async def student_message(body: StudentMessageRequest, request: Request):
         "message":              body.message,
         "conversation_history": list(session.conversation_history),  # snapshot
         # Fields populated by nodes — default values required by TypedDict
-        "student_context":  None,
-        "integrity_flags":  [],
-        "policy_blocked":   False,
-        "reply":            "",
+        "student_context":          None,
+        "integrity_flags":          [],
+        "policy_blocked":           False,
+        "integrity_classification": None,
+        "violation_detected":       False,
+        "violation_count":          0,
+        "reply":                    "",
         "sources":          [],
         "hint_level":       1,
         "should_escalate":  False,

@@ -3,14 +3,13 @@ LangGraph StateGraph — student message flow.
 
 Why LangGraph here (and NOT for the dashboard):
   The student message flow is sequential with conditional routing.
-  Each node has a clear dependency on the previous one, and Phase 2 will
-  add branches (e.g. policy violation → skip companion, escalate instead).
-  LangGraph makes that kind of conditional wiring easy to add without
-  rewriting the whole flow.
+  Each node has a clear dependency on the previous one, and branches
+  (e.g. policy violation → skip companion, escalate instead) are wired
+  here declaratively.
 
   The dashboard, by contrast, is purely parallel HTTP calls → asyncio.gather.
 
-Graph structure (v0.1):
+Graph structure:
 
   START
     │
@@ -18,9 +17,9 @@ Graph structure (v0.1):
   load_context        ← GET /participant/context/{student_id}
     │
     ▼
-  policy_check        ← v0.1 passthrough; Phase 2: POST /guardian/check
+  policy_check        ← POST /validate (Integrity Agent)
     │
-    ├── policy_blocked=True  → call_companion (returns canned refusal)
+    ├── session_escalated=True  → call_companion (returns canned refusal)
     │
     ▼
   call_companion      ← POST /companion/chat  (stateless, full history supplied)
@@ -45,8 +44,10 @@ from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 from aieic_shared.clients.companion import LabCompanionClient
+from aieic_shared.clients.integrity import IntegrityClient
 from aieic_shared.clients.participant import ParticipantClient
 from aieic_shared.schemas.companion import ChatMessage, ChatSource
+from aieic_shared.schemas.integrity import QuestionClassification
 from aieic_shared.schemas.participant import StudentContextResponse
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,10 @@ class StudentMessageState(TypedDict):
 
     # ── populated by policy_check ────────────────────────────────────────────
     integrity_flags: list[str]
-    policy_blocked: bool          # True → companion is skipped; refusal is returned
+    policy_blocked: bool                        # True → companion skipped; refusal returned
+    integrity_classification: Optional[str]     # QuestionClassification value or None
+    violation_detected: bool
+    violation_count: int
 
     # ── populated by call_companion ──────────────────────────────────────────
     reply: str
@@ -91,6 +95,7 @@ class StudentMessageState(TypedDict):
 def build_student_message_graph(
     participant: ParticipantClient,
     companion: LabCompanionClient,
+    integrity: IntegrityClient,
 ):
     """
     Compile and return the student message LangGraph.
@@ -127,16 +132,51 @@ def build_student_message_graph(
     # ── Node: policy_check ────────────────────────────────────────────────────
     async def policy_check(state: StudentMessageState) -> dict:
         """
-        v0.1: Passthrough — returns clean state, no enforcement.
+        Call POST /validate on the Integrity Agent before forwarding to companion.
 
-        Phase 2 plan:
-          - Call POST /guardian/check with student_id + turn_count
-          - If throttled → set policy_blocked=True
-          - If similarity flag → add to integrity_flags
-          - Policy Guardian runs in-line so the response is affected immediately
+        Routing rules (from ValidateQuestionResponse docstring):
+          - session_escalated=True  → block companion entirely (3+ violations)
+          - violation_detected=True → companion still answers, but classification
+                                      is recorded so it can constrain guidance
+          - otherwise               → normal companion response
         """
-        # TODO Phase 2: call Policy Guardian here
-        return {"integrity_flags": [], "policy_blocked": False}
+        _clean = {
+            "integrity_flags": [],
+            "policy_blocked": False,
+            "integrity_classification": None,
+            "violation_detected": False,
+            "violation_count": 0,
+        }
+        try:
+            history = [
+                {"role": msg.role, "content": msg.content}
+                for msg in state["conversation_history"]
+            ]
+            result = await integrity.validate(
+                student_id=state["student_id"],
+                session_id=state["session_id"],
+                lab_id=state["lab_id"],
+                question_text=state["message"],
+                conversation_history=history,
+            )
+            logger.debug(
+                f"[policy_check] {state['student_id']}: "
+                f"classification={result.classification}, "
+                f"violation={result.violation_detected}, "
+                f"escalated={result.session_escalated}"
+            )
+            return {
+                "integrity_flags": [result.violation_type] if result.violation_detected else [],
+                "policy_blocked": result.session_escalated,
+                "integrity_classification": result.classification,
+                "violation_detected": result.violation_detected,
+                "violation_count": result.violation_count,
+            }
+        except Exception as exc:
+            logger.warning(
+                f"[policy_check] Integrity Agent unavailable ({exc}); allowing through."
+            )
+            return _clean
 
     # ── Node: call_companion ──────────────────────────────────────────────────
     async def call_companion(state: StudentMessageState) -> dict:

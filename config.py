@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     companion_url: str = "http://localhost:8002"
     curriculum_url: str = "http://localhost:8003"
     assessment_url: str = "http://localhost:8004"
+    integrity_url: str = "http://localhost:8005"
+
+    # ── Integrity Agent auth ──────────────────────────────────────────────────
+    integrity_token: str = ""
 
     # ── Session store ─────────────────────────────────────────────────────────
     # v0.1: in-memory.  v0.2: swap for Cosmos DB without touching the rest.

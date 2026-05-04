@@ -35,6 +35,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from aieic_shared.clients.assessment import AssessmentClient
 from aieic_shared.clients.companion import LabCompanionClient
 from aieic_shared.clients.curriculum import CurriculumClient
+from aieic_shared.clients.integrity import IntegrityClient
 from aieic_shared.clients.participant import ParticipantClient
 
 from config import settings
@@ -73,6 +74,10 @@ async def lifespan(app: FastAPI):
     companion   = LabCompanionClient(base_url=settings.companion_url)
     curriculum  = CurriculumClient(base_url=settings.curriculum_url)
     assessment  = AssessmentClient(base_url=settings.assessment_url)
+    integrity   = IntegrityClient(
+        base_url=settings.integrity_url,
+        internal_token=settings.integrity_token,
+    )
 
     # ── Health-check all agents at startup (non-fatal) ─────────────────────
     for name, client, url in [
@@ -80,6 +85,7 @@ async def lifespan(app: FastAPI):
         ("companion",    companion,   settings.companion_url),
         ("curriculum",   curriculum,  settings.curriculum_url),
         ("assessment",   assessment,  settings.assessment_url),
+        ("integrity",    integrity,   settings.integrity_url),
     ]:
         try:
             h = await client.health()
@@ -89,7 +95,7 @@ async def lifespan(app: FastAPI):
             logger.warning(f"     Requests to {name} will fail until it comes up.")
 
     # ── Build LangGraph (student message flow) ─────────────────────────────
-    student_message_graph = build_student_message_graph(participant, companion)
+    student_message_graph = build_student_message_graph(participant, companion, integrity)
     logger.info("  ✓  LangGraph compiled (student message flow)")
 
     # ── Build dashboard service ────────────────────────────────────────────
@@ -103,6 +109,7 @@ async def lifespan(app: FastAPI):
     app.state.companion             = companion
     app.state.curriculum            = curriculum
     app.state.assessment            = assessment
+    app.state.integrity             = integrity
     app.state.student_message_graph = student_message_graph
     app.state.dashboard_service     = dashboard_service
     app.state.session_store         = session_store
@@ -114,7 +121,7 @@ async def lifespan(app: FastAPI):
     yield  # ── app is running ──────────────────────────────────────────────
 
     logger.info("Orchestrator shutting down — closing agent clients...")
-    for client in [participant, companion, curriculum, assessment]:
+    for client in [participant, companion, curriculum, assessment, integrity]:
         await client.close()
     logger.info("Shutdown complete.")
 
