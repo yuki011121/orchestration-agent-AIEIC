@@ -14,6 +14,8 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
+from pydantic import BaseModel
+
 from aieic_shared.schemas.assessment import AssessmentResult
 from aieic_shared.schemas.orchestrator import (
     StudentMessageRequest,
@@ -24,6 +26,10 @@ from aieic_shared.schemas.orchestrator import (
 router = APIRouter(prefix="/orchestrator/student", tags=["student"])
 logger = logging.getLogger(__name__)
 
+
+class EndStudentSessionRequest(BaseModel):
+    student_id: str
+    session_id: str
 
 # ── Dependency helpers ────────────────────────────────────────────────────────
 # We read from app.state instead of using FastAPI Depends() so that
@@ -38,6 +44,8 @@ def _sessions(request: Request):
 def _assessment(request: Request):
     return request.app.state.assessment
 
+def _integrity(request: Request):
+    return request.app.state.integrity
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
@@ -59,11 +67,28 @@ async def student_message(body: StudentMessageRequest, request: Request):
     graph         = _graph(request)
 
     # Step 1: resolve session
-    session = session_store.get_or_create(
+    session, created_new = session_store.get_or_create(
         student_id=body.student_id,
         lab_id=body.lab_id,
         session_id=body.session_id,
     )
+    # If this is a brand-new orchestrator session, initialize the
+    # corresponding Integrity session before running the graph.
+    if created_new:
+        integrity = _integrity(request)
+        try:
+            await integrity.start_session(
+                student_id=body.student_id,
+                session_id=session.session_id,
+                lab_id=body.lab_id,
+                course_id="CSC580",
+            )
+        except Exception as exc:
+            logger.error(f"[student_message] Failed to start Integrity session: {exc}")
+            raise HTTPException(
+                status_code=502,
+                detail="Integrity Agent unavailable during session start",
+            )
 
     # Step 2: run graph
     initial_state = {
@@ -106,6 +131,46 @@ async def student_message(body: StudentMessageRequest, request: Request):
         hint_level=final_state["hint_level"],
         tokens_used=final_state["tokens_used"],
     )
+
+
+@router.post("/session/end")
+async def end_student_session(body: EndStudentSessionRequest, request: Request):
+    """
+    End a student session.
+
+    This closes the corresponding Integrity session and removes the local
+    orchestrator session from the in-memory store.
+    """
+    session_store = _sessions(request)
+    integrity = _integrity(request)
+
+    session = session_store.get(body.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.student_id != body.student_id:
+        raise HTTPException(status_code=403, detail="Session does not belong to student")
+
+    try:
+        result = await integrity.end_session(
+            student_id=body.student_id,
+            session_id=body.session_id,
+        )
+    except Exception as exc:
+        logger.error(f"[end_student_session] Failed to end Integrity session: {exc}")
+        raise HTTPException(
+            status_code=502,
+            detail="Integrity Agent unavailable during session end",
+        )
+
+    session_store.delete(body.session_id)
+
+    return {
+        "ok": True,
+        "session_id": body.session_id,
+        "integrity_report_id": result.report_id,
+        "summary": result.summary,
+    }
 
 
 @router.post("/submit", response_model=AssessmentResult)

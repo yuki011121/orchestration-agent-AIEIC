@@ -56,16 +56,23 @@ class SessionStore:
     def __init__(self, ttl_seconds: int = 3600) -> None:
         self._sessions: dict[str, SessionState] = {}
         self._ttl = timedelta(seconds=ttl_seconds)
-
+    
     def get_or_create(
         self,
         student_id: str,
         lab_id: str,
         session_id: Optional[str] = None,
-    ) -> SessionState:
+    ) -> tuple[SessionState, bool]:
         """
-        Return the existing session if session_id is valid and matches
-        the student/lab, otherwise create a fresh one.
+        Return a tuple of (session, created_new).
+
+        created_new = False if an existing valid session was reused.
+        created_new = True if a fresh session was created.
+
+        A session is considered reusable only if:
+        - the session_id exists in the store
+        - the stored session belongs to the same student
+        - the stored session belongs to the same lab
         """
         self._evict_expired()
 
@@ -73,12 +80,12 @@ class SessionStore:
             sess = self._sessions[session_id]
             # Guard against session hijacking or stale IDs from different labs
             if sess.student_id == student_id and sess.lab_id == lab_id:
-                return sess
+                return sess, False
 
         new_id = session_id or str(uuid.uuid4())
         sess = SessionState(session_id=new_id, student_id=student_id, lab_id=lab_id)
         self._sessions[new_id] = sess
-        return sess
+        return sess, True
 
     def get(self, session_id: str) -> Optional[SessionState]:
         return self._sessions.get(session_id)
@@ -88,3 +95,12 @@ class SessionStore:
         expired = [k for k, v in self._sessions.items() if v.last_updated < cutoff]
         for k in expired:
             del self._sessions[k]
+
+    def delete(self, session_id: str) -> bool:
+        """
+        Delete a session from the store.
+
+        Returns True if the session existed and was removed.
+        Returns False if the session was not found.
+        """
+        return self._sessions.pop(session_id, None) is not None
