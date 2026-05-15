@@ -95,3 +95,12 @@ class SessionStore:
         expired = [k for k, v in self._sessions.items() if v.last_updated < cutoff]
         for k in expired:
             del self._sessions[k]
+
+    def delete(self, session_id: str) -> bool:
+        """
+        Delete a session from the store.
+
+        Returns True if the session existed and was removed.
+        Returns False if the session was not found.
+        """
+        return self._sessions.pop(session_id, None) is not None
