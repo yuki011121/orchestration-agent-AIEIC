@@ -38,6 +38,8 @@ def _sessions(request: Request):
 def _assessment(request: Request):
     return request.app.state.assessment
 
+def _integrity(request: Request):
+    return request.app.state.integrity
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
@@ -59,11 +61,28 @@ async def student_message(body: StudentMessageRequest, request: Request):
     graph         = _graph(request)
 
     # Step 1: resolve session
-    session = session_store.get_or_create(
+    session, created_new = session_store.get_or_create(
         student_id=body.student_id,
         lab_id=body.lab_id,
         session_id=body.session_id,
     )
+    # If this is a brand-new orchestrator session, initialize the
+    # corresponding Integrity session before running the graph.
+    if created_new:
+        integrity = _integrity(request)
+        try:
+            await integrity.start_session(
+                student_id=body.student_id,
+                session_id=session.session_id,
+                lab_id=body.lab_id,
+                course_id="CSC580",
+            )
+        except Exception as exc:
+            logger.error(f"[student_message] Failed to start Integrity session: {exc}")
+            raise HTTPException(
+                status_code=502,
+                detail="Integrity Agent unavailable during session start",
+            )
 
     # Step 2: run graph
     initial_state = {
