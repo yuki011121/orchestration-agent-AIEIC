@@ -79,6 +79,7 @@ class StudentMessageState(TypedDict):
     integrity_flags: list[str]
     policy_blocked: bool                        # True → companion skipped; refusal returned
     integrity_classification: Optional[str]     # QuestionClassification value or None
+    integrity_guidance: Optional[str]           # Narrative constraint for Companion
     violation_detected: bool
     violation_count: int
 
@@ -144,6 +145,7 @@ def build_student_message_graph(
             "integrity_flags": [],
             "policy_blocked": False,
             "integrity_classification": None,
+            "integrity_guidance": None,
             "violation_detected": False,
             "violation_count": 0,
         }
@@ -165,10 +167,29 @@ def build_student_message_graph(
                 f"violation={result.violation_detected}, "
                 f"escalated={result.session_escalated}"
             )
+            guidance = None
+
+            if result.violation_detected:
+                guidance = (
+                    f"Integrity guidance: The student's latest message was classified as "
+                    f"{result.classification}. Do not provide direct answers or solution steps. "
+                    "Respond with brief, high-level conceptual hints only."
+                )
+            elif result.classification in (
+                QuestionClassification.PROCEDURAL,
+                QuestionClassification.ANSWER_FARMING,
+                QuestionClassification.DIRECT_SOLUTION,
+            ):
+                guidance = (
+                    f"Integrity guidance: The student's latest message was classified as "
+                    f"{result.classification}. Keep the response brief, conceptual, and non-solution-oriented."
+                )
+
             return {
                 "integrity_flags": [result.violation_type] if result.violation_detected else [],
                 "policy_blocked": result.session_escalated,
                 "integrity_classification": result.classification,
+                "integrity_guidance": guidance,
                 "violation_detected": result.violation_detected,
                 "violation_count": result.violation_count,
             }
@@ -207,13 +228,23 @@ def build_student_message_graph(
 
         try:
             ctx = state.get("student_context")
+            integrity_guidance = state.get("integrity_guidance")
+
+            summary_parts = []
+            if ctx and ctx.summary:
+                summary_parts.append(ctx.summary)
+            if integrity_guidance:
+                summary_parts.append(integrity_guidance)
+
+            combined_summary = "\n\n".join(summary_parts) if summary_parts else None
+
             response = await companion.chat(
                 student_id=state["student_id"],
                 session_id=state["session_id"],
                 message=state["message"],
                 lab_id=state["lab_id"],
                 conversation_history=state["conversation_history"],
-                student_context_summary=ctx.summary if ctx else None,
+                student_context_summary=combined_summary,
             )
             logger.debug(
                 f"[call_companion] hint_level={response.hint_level}, "

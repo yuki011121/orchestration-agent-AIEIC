@@ -11,6 +11,8 @@ during the FastAPI lifespan in main.py.
 from __future__ import annotations
 
 import logging
+import re
+import time
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -25,6 +27,16 @@ from aieic_shared.schemas.orchestrator import (
 
 router = APIRouter(prefix="/orchestrator/student", tags=["student"])
 logger = logging.getLogger(__name__)
+
+SUSPICIOUS_PROMPT_PATTERNS = [
+    r"ignore\s+(all\s+)?previous\s+instructions",
+    r"disregard\s+(all\s+)?previous\s+instructions",
+    r"reveal\s+(the\s+)?system\s+prompt",
+    r"show\s+(me\s+)?your\s+hidden\s+instructions",
+    r"developer\s+mode",
+    r"pretend\s+you\s+have\s+no\s+rules",
+    r"act\s+as\s+(an?\s+)?unrestricted",
+]
 
 
 class EndStudentSessionRequest(BaseModel):
@@ -47,6 +59,10 @@ def _assessment(request: Request):
 def _integrity(request: Request):
     return request.app.state.integrity
 
+def _looks_like_prompt_injection(text: str) -> bool:
+    lowered = text.lower()
+    return any(re.search(pattern, lowered) for pattern in SUSPICIOUS_PROMPT_PATTERNS)
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/message", response_model=StudentMessageResponse)
@@ -65,6 +81,17 @@ async def student_message(body: StudentMessageRequest, request: Request):
     """
     session_store = _sessions(request)
     graph         = _graph(request)
+    t0 = time.perf_counter()
+
+    if _looks_like_prompt_injection(body.message):
+        logger.warning(
+            "[student_message] blocked suspicious meta-instruction prompt for student=%s",
+            body.student_id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Request blocked by basic prompt-safety screening.",
+        )
 
     # Step 1: resolve session
     session, created_new = session_store.get_or_create(
@@ -102,13 +129,14 @@ async def student_message(body: StudentMessageRequest, request: Request):
         "integrity_flags":          [],
         "policy_blocked":           False,
         "integrity_classification": None,
+        "integrity_guidance":       None,
         "violation_detected":       False,
         "violation_count":          0,
         "reply":                    "",
-        "sources":          [],
-        "hint_level":       1,
-        "should_escalate":  False,
-        "tokens_used":      0,
+        "sources":                  [],
+        "hint_level":               1,
+        "should_escalate":          False,
+        "tokens_used":              0,
     }
 
     try:
@@ -116,11 +144,21 @@ async def student_message(body: StudentMessageRequest, request: Request):
     except Exception as exc:
         logger.error(f"[student_message] Graph invocation failed: {exc}")
         raise HTTPException(status_code=500, detail="Orchestrator internal error")
+    
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
     # Step 3: update session history with this completed turn
     session.add_turn(
         user_message=body.message,
         assistant_reply=final_state["reply"],
+        response_time_ms=elapsed_ms,
+    )
+
+    logger.info(
+        "[student_message] student=%s session=%s response_time_ms=%d",
+        body.student_id,
+        session.session_id,
+        elapsed_ms,
     )
 
     # Step 4: return

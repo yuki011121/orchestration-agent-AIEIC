@@ -39,14 +39,22 @@ class SessionState:
         self.conversation_history: list[ChatMessage] = []
         self.integrity_flags: list[str] = []
         self.needs_instructor_review: bool = False
+        self.response_times_ms: list[int] = []
         self.created_at: datetime = datetime.utcnow()
         self.last_updated: datetime = datetime.utcnow()
 
-    def add_turn(self, user_message: str, assistant_reply: str) -> None:
+    def add_turn(
+        self,
+        user_message: str,
+        assistant_reply: str,
+        response_time_ms: Optional[int] = None,
+    ) -> None:
         """Append a completed user/assistant turn to history."""
         self.conversation_history.append(ChatMessage(role="user", content=user_message))
         self.conversation_history.append(ChatMessage(role="assistant", content=assistant_reply))
         self.conversation_turn_count += 1
+        if response_time_ms is not None:
+            self.response_times_ms.append(response_time_ms)
         self.last_updated = datetime.utcnow()
 
 
