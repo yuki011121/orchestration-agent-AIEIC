@@ -7,8 +7,8 @@ Why in-memory for now:
   - Zero infrastructure overhead while the system is being built
   - Easy to reason about during development / testing
 
-How to upgrade to Cosmos DB in v0.2:
-  - Replace _sessions dict with Cosmos DB container reads/writes
+How to upgrade for integrated mode:
+  - Replace _sessions dict with Postgres-backed session and turn repositories
   - SessionStore interface stays the same — nothing else in the codebase changes
 
 What lives in a session:

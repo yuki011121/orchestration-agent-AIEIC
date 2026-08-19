@@ -25,8 +25,11 @@ class Settings(BaseSettings):
     # ── Integrity Agent auth ──────────────────────────────────────────────────
     integrity_token: str = ""
 
+    # ── Global runtime database ───────────────────────────────────────────────
+    database_url: str = ""
+
     # ── Session store ─────────────────────────────────────────────────────────
-    # v0.1: in-memory.  v0.2: swap for Cosmos DB without touching the rest.
+    # v0.1: in-memory. Integrated runtime state moves to Postgres repositories.
     session_ttl_seconds: int = 3600
 
 

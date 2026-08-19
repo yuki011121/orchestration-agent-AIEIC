@@ -21,7 +21,7 @@ Architecture:
   - LangGraph StateGraph for student message flow (sequential, conditional)
   - asyncio.gather for dashboard aggregation (parallel)
   - aieic-shared typed clients for all downstream agent calls
-  - In-memory session store for v0.1 (→ Cosmos DB in v0.2)
+  - In-memory session store for v0.1 (→ Postgres repositories in integrated mode)
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ from aieic_shared.clients.participant import ParticipantClient
 from config import settings
 from graphs.student_message import build_student_message_graph
 from routers.instructor import router as instructor_router
+from services.curriculum_publish import CurriculumPackagePublisher
 from routers.student import router as student_router
 from services.dashboard import DashboardService
 from services.session import SessionStore
@@ -72,7 +73,7 @@ async def lifespan(app: FastAPI):
     # ── Create typed HTTP clients ──────────────────────────────────────────
     participant = ParticipantClient(base_url=settings.participant_url)
     companion   = LabCompanionClient(base_url=settings.companion_url)
-    curriculum  = CurriculumClient(base_url=settings.curriculum_url)
+    curriculum  = CurriculumClient(base_url=settings.curriculum_url, timeout=180.0)
     assessment  = AssessmentClient(base_url=settings.assessment_url)
     integrity   = IntegrityClient(
         base_url=settings.integrity_url,
@@ -101,6 +102,17 @@ async def lifespan(app: FastAPI):
     # ── Build dashboard service ────────────────────────────────────────────
     dashboard_service = DashboardService(participant, assessment, curriculum)
 
+    curriculum_publisher = None
+    if settings.database_url:
+        try:
+            curriculum_publisher = CurriculumPackagePublisher(settings.database_url)
+            logger.info("  ✓  global database ready for curriculum packages")
+        except Exception as exc:
+            logger.warning("  ✗  global database unavailable — %s", exc)
+            logger.warning("     Material approval will fall back to Curriculum Designer only.")
+    else:
+        logger.warning("  ✗  DATABASE_URL not set — curriculum package publishing disabled.")
+
     # ── Session store (in-memory, v0.1) ────────────────────────────────────
     session_store = SessionStore(ttl_seconds=settings.session_ttl_seconds)
 
@@ -112,6 +124,7 @@ async def lifespan(app: FastAPI):
     app.state.integrity             = integrity
     app.state.student_message_graph = student_message_graph
     app.state.dashboard_service     = dashboard_service
+    app.state.curriculum_publisher  = curriculum_publisher
     app.state.session_store         = session_store
 
     logger.info("─" * 60)

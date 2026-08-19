@@ -45,7 +45,7 @@ python -m aieic_shared.mocks.run_all
 cd ../integrity_agent && uvicorn app:app --port 8005 --reload
 
 # 3. Start orchestrator (in a separate terminal)
-cp .env.example .env          # fill in INTEGRITY_TOKEN
+cp .env.example .env          # fill in INTEGRITY_TOKEN and DATABASE_URL
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -61,6 +61,10 @@ python -m aieic_shared.mocks.run_all --no-participant --no-assessment
 # Point orchestrator at real agents via .env
 PARTICIPANT_URL=http://localhost:8001
 ASSESSMENT_URL=http://localhost:8004
+DATABASE_URL=postgresql://aieic:aieic@localhost:5432/aieic
+
+# Initialize or upgrade the shared runtime schema
+alembic upgrade head
 ```
 
 ## Project Structure
@@ -68,7 +72,7 @@ ASSESSMENT_URL=http://localhost:8004
 ```
 orchestration-agent-AIEIC/
 ├── main.py                  # FastAPI app + lifespan (client init, graph build)
-├── config.py                # Settings (agent URLs, session TTL)
+├── config.py                # Settings (agent URLs, DB URL, session TTL)
 ├── requirements.txt
 ├── Dockerfile
 ├── graphs/
@@ -77,7 +81,9 @@ orchestration-agent-AIEIC/
 │   ├── student.py           # POST /orchestrator/student/message, /submit
 │   └── instructor.py        # GET /orchestrator/instructor/dashboard/{lab_id}, etc.
 └── services/
-    ├── session.py           # In-memory session store (→ Cosmos DB in v0.2)
+    ├── session.py           # In-memory session store (→ Postgres repositories)
+    ├── database.py          # SQLAlchemy tables for the shared Postgres runtime
+    ├── curriculum_publish.py # Publishes approved drafts into lab_packages
     └── dashboard.py         # Parallel agent aggregation for instructor dashboard
 ```
 
@@ -97,11 +103,15 @@ Full request/response schemas and end-to-end flows: [`INTERFACE_CONTRACT.md`](ht
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/orchestrator/instructor/dashboard/{lab_id}` | All 4 dashboard tabs |
+| GET | `/orchestrator/instructor/material/{lab_id}` | Fetch current curriculum draft |
 | POST | `/orchestrator/instructor/material/approve` | Approve AI-generated material |
 | POST | `/orchestrator/instructor/material/request-changes` | Request regeneration |
+| POST | `/orchestrator/instructor/material/upload` | Upload instructor material |
+| POST | `/orchestrator/instructor/material/upload-instructions` | Save tutoring instructions |
+| POST | `/orchestrator/instructor/material/generate-with-material` | Generate spec/quiz/rubric from form fields + optional PDF/TXT/MD |
+| POST | `/orchestrator/instructor/material/generate-tasks` | Generate lab tasks |
 | POST | `/orchestrator/instructor/material/generate-quiz` | Generate quiz |
 | POST | `/orchestrator/instructor/material/check-typos` | Check material for errors |
+| POST | `/orchestrator/instructor/grade-batch?lab_id=` | Queue grading for pending submissions |
 | POST | `/orchestrator/instructor/review/{id}/complete` | Complete manual review |
 | GET | `/orchestrator/instructor/grades/csv?lab_id=` | Download grades as CSV |
-
-
